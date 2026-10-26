@@ -1,4 +1,1 @@
-requests
-beautifulsoup4
-cloudscraper
-yfinance
+psxdata
