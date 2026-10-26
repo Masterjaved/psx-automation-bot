@@ -1,3 +1,18 @@
+import subprocess
+import sys
+
+# خودکار چیک اور لائبریریاں انسٹال کرنے کا نظام
+def install_missing_packages():
+    required = {'requests', 'bs4', 'cloudscraper', 'yfinance'}
+    import pkg_resources
+    installed = {pkg.key for pkg in pkg_resources.working_set}
+    missing = required - installed
+    if missing:
+        print(f"Installing missing packages: {missing}")
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
+
+install_missing_packages()
+
 import json
 import os
 import smtplib
@@ -24,11 +39,10 @@ def load_data():
             json.dump(default_data, f, indent=4, ensure_ascii=False)
         return default_data
 
-# 2. کلاؤڈ اسکریپر کے ذریعے فائر وال اور بلاکنگ کو بائی پاس کر کے لائیو ڈیٹا نکالنے کا فنکشن
+# 2. کلاؤڈ اسکریپر کے ذریعے لائیو ڈیٹا نکالنے کا فنکشن
 def get_bypass_stock_data(symbol):
     clean_symbol = symbol.replace('.KA', '').strip().upper()
     
-    # cloudscraper خودبخود کلاؤڈ فلائر اور بوٹ پروٹیکشن کو بائی پاس کر لیता ہے
     scraper = cloudscraper.create_scraper(
         browser={
             'browser': 'chrome',
@@ -38,28 +52,17 @@ def get_bypass_stock_data(symbol):
     )
     
     try:
-        # پاکستان اسٹاک ایکسچینج کے پبلک ڈیٹا پیج یا MSN فنانس کا متبادل لنک
-        url = f"https://dps.psx.com.pk/company/{clean_symbol}"
-        response = scraper.get(url, timeout=12)
+        api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
+        api_res = scraper.get(api_url, timeout=10)
         
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # پی ایس ایکس کے پیج سے لائیو قیمت تلاش کرنا
-            price_div = soup.find('div', {'class': 'stats_val'}) or soup.find('span', {'id': 'ltp'})
-            
-            # اگر اس طرح نہ ملے تو ہم اس کے JSON API سے ڈیٹا نکالنے کی کوشش کرتے ہیں
-            api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
-            api_res = scraper.get(api_url, timeout=10)
-            
-            if api_res.status_code == 200:
-                api_data = api_res.json()
-                if "data" in api_data and len(api_data["data"]) > 0:
-                    latest = api_data["data"][-1]
-                    current_price = float(latest[1])
-                    open_price = float(api_data["data"][0][1]) if len(api_data["data"]) > 1 else current_price
-                    percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
-                    return current_price, open_price, percent_change
+        if api_res.status_code == 200:
+            api_data = api_res.json()
+            if "data" in api_data and len(api_data["data"]) > 0:
+                latest = api_data["data"][-1]
+                current_price = float(latest[1])
+                open_price = float(api_data["data"][0][1]) if len(api_data["data"]) > 1 else current_price
+                percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
+                return current_price, open_price, percent_change
     except Exception as e:
         print(f"Bypass Error for {clean_symbol}: {e}")
         
@@ -87,7 +90,6 @@ def generate_psx_report():
             total_gain_loss_pct += percent_change
             valid_stocks_count += 1
             
-            # تکنیکی لیولز (اسٹاپ لاس اور ٹارگٹس)
             stop_loss = round(current_price * 0.97, 2)
             target_1 = round(current_price * 1.025, 2)
             target_2 = round(current_price * 1.05, 2)
@@ -126,7 +128,6 @@ def generate_psx_report():
     perf_sign = "+" if avg_performance >= 0 else ""
     perf_color = "#2e7d32" if avg_performance >= 0 else "#c62828"
 
-    # ای میل کا مکمل ایچ ٹی ایم ایل ڈیزائن
     html_content = f"""
     <div dir="rtl" style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 10px; color: #333333;">
         <div style="max-width: 650px; margin: auto; background: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
@@ -135,7 +136,6 @@ def generate_psx_report():
             
             <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی فائر وال بائی پاس کر کے حاصل کردہ تازہ ترین لائیو ریٹس اور ٹریڈنگ لیولز کی رپورٹ:</p>
             
-            <!-- پورٹ فولیو سمری -->
             <div style="background-color: #e0f2f1; border: 1px solid #b2dfdb; padding: 10px; border-radius: 6px; margin-bottom: 15px; text-align: center;">
                 <span style="font-size: 14px; font-weight: bold; color: #00695c;">واچ لسٹ کی مجموعی مارکیٹ کارکردگی: </span>
                 <span style="font-size: 15px; font-weight: bold; color: {perf_color};">{perf_sign}{avg_performance:.2f}%</span>
@@ -171,7 +171,7 @@ def generate_psx_report():
             <div style="background-color: #fffde7; border-right: 4px solid #fbc02d; padding: 10px; margin-top: 10px; border-radius: 4px;">
                 <h4 style="margin: 0 0 6px 0; color: #f57f17; font-size: 13px;">📰 مارکیٹ کا اہم رجحان:</h4>
                 <ul style="margin: 0; padding-right: 15px; font-size: 12px; line-height: 1.5; color: #4e342e;">
-                    <li>براؤزر سمیولیشن (Cloudscraper) کے ذریعے اب سرور کی رکاوٹیں ختم کر دی گئی ہیں۔</li>
+                    <li>خودکار لائبریری انسٹالیشن کے ذریعے اب کلاؤڈ پر کوئی ایرر نہیں آئے گا۔</li>
                     <li>مارکیٹ کے اتار چڑھاؤ پر گہری نظر رکھیں۔</li>
                 </ul>
             </div>
@@ -186,7 +186,6 @@ def generate_psx_report():
     
     send_email("📊 PSX بائی پاس لائیو مارکیٹ رپورٹ", html_content, to_email)
 
-# 4. ای میل بھیجنے کا فنکشن
 def send_email(subject, html_body, to_email):
     sender_email = os.environ.get("SENDER_EMAIL")
     sender_password = os.environ.get("SENDER_PASSWORD")
