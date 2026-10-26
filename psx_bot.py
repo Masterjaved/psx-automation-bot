@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import requests
+from bs4 import BeautifulSoup
 
 # 1. فائل سے ڈیٹا لوڈ کرنے کا فنکشن
 def load_data():
@@ -17,34 +18,45 @@ def load_data():
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         default_data = {
             "email_recipient": "apni_email_yahan_likhein@gmail.com",
-            "watchlist": ["SYS", "OGDC", "HUBC", "FFC", "CHWC", "CNERGY", "KEL", "MLCF"]
+            "watchlist": ["SYS", "OGDC", "HUBC", "FFC", "CHWC", "CNERGY", "KEL", "MLCF", "SAZEW", "EFERT"]
         }
         with open("watchlist.json", "w", encoding="utf-8") as f:
             json.dump(default_data, f, indent=4, ensure_ascii=False)
         return default_data
 
-# 2. پاکستان اسٹاک ایکسچینج (PSX) کی آفیشل ویب سائٹ سے لائیو ڈیٹا اور معلومات حاصل کرنے کا فنکشن
-def fetch_psx_live_data(symbol):
+# 2. MSN Money اور متبادل ذرائع سے لائیو ڈیٹا حاصل کرنے کا اسمارٹ فنکشن
+def get_msn_stock_data(symbol):
+    clean_symbol = symbol.replace('.KA', '').strip().upper()
+    
+    # MSN Money عام طور پر PSX کے لیے سمبل اور مارکیٹ کوڈ استعمال کرتا ہے
+    # ہم یہاں MSN کے پبلک پیج یا فنانس سرچ سے لائیو ریٹ اسکریپ کرنے کا طریقہ لگاتے ہیں
     try:
-        # PSX کی آفیشل پبلিক API کا لنک
-        url = f"https://dps.psx.com.pk/timeseries/int/{symbol}"
+        url = f"https://www.msn.com/en-us/money/stockdetails/fi-10.1.{clean_symbol}.PK"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=8)
         if response.status_code == 200:
-            data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                # آخری لائیو قیمت اور تاریخ حاصل کرنا
-                latest_entry = data["data"][-1]
-                current_price = float(latest_entry[1]) # [time, price, volume]
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # MSN کے صفحے سے قیمت تلاش کرنے کے مختلف ممکنہ ٹیگز
+            price_tag = soup.find('div', {'class': 'livePrice'}) or soup.find('span', {'class': 'price'})
+            if price_tag:
+                current_price = float(price_tag.text.replace(',', '').strip())
                 
-                # پچھلے دن کی یا اوپننگ قیمت کا تخمینہ یا پچھلا ریکارڈ
-                open_price = float(data["data"][0][1]) if len(data["data"]) > 1 else current_price
-                return current_price, open_price
+                # فیصد تبدیلی تلاش کرنا
+                change_tag = soup.find('div', {'class': 'netChangePercent'}) or soup.find('span', {'class': 'percent'})
+                percent_change = 0.0
+                if change_tag:
+                    percent_change = float(change_tag.text.replace('%', '').replace('+', '').strip())
+                
+                open_price = current_price / (1 + (percent_change / 100)) if percent_change != 0 else current_price
+                return current_price, open_price, percent_change
     except Exception as e:
-        print(f"PSX API Error for {symbol}: {e}")
-    return None, None
+        print(f"MSN Fetch Error for {clean_symbol}: {e}")
+        
+    return None, None, None
 
 # 3. رپورٹ تیار کرنے کا مرکزی فنکشن
 def generate_psx_report():
@@ -53,44 +65,37 @@ def generate_psx_report():
     to_email = data["email_recipient"]
     
     table_rows = ""
-    dividend_info = "<li>کمپنیوں کے کارپوریٹ اعلانات اور ڈیویڈنڈز کی لائیو اسکیننگ جاری ہے۔</li>"
+    dividend_info = "<li>کمپنیوں کے کارپوریٹ اعلانات اور آنے والے ڈیویڈنڈز کی لائیو اسکیننگ جاری ہے۔</li>"
     
     total_gain_loss_pct = 0
     valid_stocks_count = 0
     
     for stock in stocks:
-        clean_symbol = stock.replace('.KA', '').strip()
-        print(f"Fetching live PSX data for {clean_symbol}...")
+        clean_symbol = stock.replace('.KA', '').strip().upper()
+        print(f"Fetching MSN data for {clean_symbol}...")
         
-        current_price, open_price = fetch_psx_live_data(clean_symbol)
+        current_price, open_price, percent_change = get_msn_stock_data(clean_symbol)
         
         if current_price is not None:
-            # اگر اوپننگ ریٹ نہ ملے تو موجودہ قیمت ہی مان لیں
-            if open_price is None or open_price == 0:
-                open_price = current_price
-                
             price_change = current_price - open_price
-            percent_change = (price_change / open_price) * 100 if open_price != 0 else 0
-            
             total_gain_loss_pct += percent_change
             valid_stocks_count += 1
             
-            # تکنیکی لیولز (اسٹاپ لاس اور ٹارگٹس) کا خودکار حساب
-            stop_loss = round(current_price * 0.97, 2)  # 3 فیصد نیچے اسٹاپ لاس
-            target_1 = round(current_price * 1.025, 2)  # ڈھائی فیصد منافع پہ پہلا ہدف
-            target_2 = round(current_price * 1.05, 2)   # پانچ فیصد منافع پہ دوسرا ہدف
+            # تکنیکی لیولز (اسٹاپ لاس اور ٹارگٹس)
+            stop_loss = round(current_price * 0.97, 2)
+            target_1 = round(current_price * 1.025, 2)
+            target_2 = round(current_price * 1.05, 2)
             
-            # اگر قیمت رسک زون میں ہو
-            is_danger = percent_change <= -2.0
+            is_danger = percent_change <= -2.5
             
-            sign = "+" if price_change >= 0 else ""
-            color_class = "color: #2e7d32; font-weight: bold;" if price_change >= 0 else "color: #c62828; font-weight: bold;"
+            sign = "+" if percent_change >= 0 else ""
+            color_class = "color: #2e7d32; font-weight: bold;" if percent_change >= 0 else "color: #c62828; font-weight: bold;"
             
             if is_danger:
                 bg_highlight = "#ffcdd2"
                 danger_badge = " <span style='background: #b71c1c; color: white; padding: 2px 4px; border-radius: 3px; font-size: 9px;'>الرٹ!</span>"
             else:
-                bg_highlight = "#e8f5e9" if price_change >= 0 else "#ffebee"
+                bg_highlight = "#e8f5e9" if percent_change >= 0 else "#ffebee"
                 danger_badge = ""
             
             table_rows += f"""
@@ -107,7 +112,7 @@ def generate_psx_report():
             table_rows += f"""
             <tr style="background-color: #fffde7; text-align: center;">
                 <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{clean_symbol}</td>
-                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">PSX سرور سے لائیو ڈیٹا عارضی طور پر موصول نہیں ہوا۔</td>
+                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">MSN فنانس سرور سے لائیو ڈیٹا حاصل کرنے میں عارضی وقفہ۔</td>
             </tr>
             """
 
@@ -120,13 +125,13 @@ def generate_psx_report():
     <div dir="rtl" style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 10px; color: #333333;">
         <div style="max-width: 650px; margin: auto; background: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
             
-            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - لائیو ڈائریکٹ رپورٹ</h2>
+            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - MSN فنانس لائیو رپورٹ</h2>
             
-            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کی براہِ راست PSX سرور سے حاصل کردہ لائیو قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
+            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی MSN فنانس سے حاصل کردہ تازہ ترین لائیو قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
             
             <!-- پورٹ فولیو سمری -->
             <div style="background-color: #e0f2f1; border: 1px solid #b2dfdb; padding: 10px; border-radius: 6px; margin-bottom: 15px; text-align: center;">
-                <span style="font-size: 14px; font-weight: bold; color: #00695c;">واچ لسٹ کی مجموعی کارکردگی: </span>
+                <span style="font-size: 14px; font-weight: bold; color: #00695c;">واچ لسٹ کی مجموعی مارکیٹ کارکردگی: </span>
                 <span style="font-size: 15px; font-weight: bold; color: {perf_color};">{perf_sign}{avg_performance:.2f}%</span>
             </div>
 
@@ -160,20 +165,20 @@ def generate_psx_report():
             <div style="background-color: #fffde7; border-right: 4px solid #fbc02d; padding: 10px; margin-top: 10px; border-radius: 4px;">
                 <h4 style="margin: 0 0 6px 0; color: #f57f17; font-size: 13px;">📰 مارکیٹ کا اہم رجحان:</h4>
                 <ul style="margin: 0; padding-right: 15px; font-size: 12px; line-height: 1.5; color: #4e342e;">
-                    <li>براہِ راست PSX ڈیٹا سورس جڑ جانے سے اب تمام ریٹس بالکل مستند اور لائیو آئیں گے۔</li>
-                    <li>مارکیٹ کے اتار چڑھاؤ کے دوران اپنے اسٹاپ لاس کی سختی سے پابندی کریں۔</li>
+                    <li>MSN فنانس سورس کے استعمال سے اب ریٹس میں غیر ضروری فرق ختم ہو جائے گا۔</li>
+                    <li>رسک زون والے شیئرز پر کڑی نظر رکھیں۔</li>
                 </ul>
             </div>
             
             <p style="font-size: 11px; color: #777777; text-align: center; margin-top: 15px; border-top: 1px solid #eeeeee; padding-top: 10px;">
-                ⚠️ <strong>نوٹ:</strong> یہ خودکار رپورٹ براہِ راست مارکیٹ کے اعداد و شمار پر مبنی ہے۔ ٹریڈ سے پہلے تصدیق لازمی کریں۔
+                ⚠️ <strong>نوٹ:</strong> یہ خودکار رپورٹ مالیاتی ڈیٹا پر مبنی ہے۔ ٹریڈ سے پہلے تصدیق لازمی کریں۔
             </p>
             
         </div>
     </div>
     """
     
-    send_email("📊 PSX ڈائریکٹ لائیو مارکیٹ رپورٹ", html_content, to_email)
+    send_email("📊 PSX MSN فنانس لائیو رپورٹ", html_content, to_email)
 
 # 4. ای میل بھیجنے کا فنکشن
 def send_email(subject, html_body, to_email):
