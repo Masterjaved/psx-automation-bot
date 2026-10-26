@@ -41,32 +41,25 @@ def load_data():
 
 # 2. کلاؤڈ اسکریپر کے ذریعے لائیو ڈیٹا نکالنے کا فنکشن
 def get_bypass_stock_data(symbol):
-    clean_symbol = symbol.replace('.KA', '').strip().upper()
-    
+    s = symbol.replace('.KA', '').strip().upper()
     scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'desktop': True
-        }
+        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
     )
-    
     try:
-        api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
-        api_res = scraper.get(api_url, timeout=10)
-        
-        if api_res.status_code == 200:
-            api_data = api_res.json()
-            if "data" in api_data and len(api_data["data"]) > 0:
-                latest = api_data["data"][-1]
-                current_price = float(latest[1])
-                open_price = float(api_data["data"][0][1]) if len(api_data["data"]) > 1 else current_price
-                percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
-                return current_price, open_price, percent_change
+        r = scraper.get(f"https://dps.psx.com.pk/timeseries/int/{s}", timeout=15)
+        print(s, "status:", r.status_code, "|", r.text[:120])
+        r.raise_for_status()
+        rows = r.json().get("data", [])
+        if not rows:
+            return None, None, None
+        rows = sorted(rows, key=lambda x: x[0])  # پرانا → نیا
+        open_price = float(rows[0][1])
+        current = float(rows[-1][1])
+        pct = ((current - open_price) / open_price) * 100 if open_price else 0
+        return current, open_price, pct
     except Exception as e:
-        print(f"Bypass Error for {clean_symbol}: {e}")
-        
-    return None, None, None
+        print(f"Error for {s}: {type(e).__name__}: {e}")
+        return None, None, None
 
 # 3. رپورٹ تیار کرنے کا مرکزی فنکشن
 def generate_psx_report():
