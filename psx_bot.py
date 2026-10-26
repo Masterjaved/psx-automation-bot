@@ -1,6 +1,7 @@
 import json
 import os
 import smtplib
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import yfinance as yf
@@ -16,13 +17,13 @@ def load_data():
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         default_data = {
             "email_recipient": "apni_email_yahan_likhein@gmail.com",
-            "watchlist": ["SYS.KA", "OGDC.KA", "HUBC.KA", "FFC.KA"]
+            "watchlist": ["SYS", "OGDC", "HUBC", "FFC", "CHWC", "CNERGY", "KEL", "MLCF"]
         }
         with open("watchlist.json", "w", encoding="utf-8") as f:
             json.dump(default_data, f, indent=4, ensure_ascii=False)
         return default_data
 
-# 2. لائیو ڈیٹا، ٹریڈنگ لیولز، ڈیویڈنڈ اور ایچ ٹی ایم ایل ٹیبل بنانے کا فنکشن
+# 2. لائیو ڈیٹا، ٹریڈنگ لیولز اور بہترین رپورٹ تیار کرنے کا فنکشن
 def generate_psx_report():
     data = load_data()
     stocks = data["watchlist"]
@@ -30,28 +31,38 @@ def generate_psx_report():
     
     table_rows = ""
     dividend_info = ""
+    current_date = datetime.now()
+    cutoff_date = current_date - timedelta(days=120) # صرف پچھले یا آنے والے 4 ماہ کے اندر کے ڈیویڈنڈز
     
     for stock in stocks:
         try:
-            ticker_symbol = stock if "." in stock else stock + ".KA"
-            print(f"Fetching data for {ticker_symbol}...")
+            # پاکستانی شیئرز کے لیے یاہو فنانس اور متبادل ہینڈلنگ
+            clean_symbol = stock.replace('.KA', '').strip()
+            ticker_symbol = clean_symbol + ".KA"
             
+            print(f"Fetching data for {ticker_symbol}...")
             ticker = yf.Ticker(ticker_symbol)
             todays_data = ticker.history(period="10d", timeout=10)
             
-            clean_symbol = stock.replace('.KA', '')
-            
-            # آنے والے ڈیویڈنڈ کا ڈیٹا چیک کرنا
+            # اگر .KA سے ڈیٹا نہ ملے تو صرف نام سے کوشش کریں
+            if todays_data.empty:
+                ticker_symbol = clean_symbol
+                ticker = yf.Ticker(ticker_symbol)
+                todays_data = ticker.history(period="10d", timeout=10)
+
+            # ڈیویڈنڈ کا تازہ ترین ڈیٹا چیک کرنا (پرانے سالوں کو فلٹر کر کے)
             try:
                 dividends = ticker.dividends
                 if not dividends.empty:
-                    last_div = dividends.tail(1)
-                    div_date = last_div.index[0].strftime('%Y-%m-%d')
-                    div_val = last_div.values[0]
-                    if div_val > 0:
-                        dividend_info += f"<li><b>{clean_symbol}</b>: آخری یا متوقع ڈیویڈنڈ روپیہ {div_val:.2f} (تاریخ: {div_date})</li>"
-            except:
-                pass
+                    recent_divs = dividends[dividends.index >= cutoff_date]
+                    if not recent_divs.empty:
+                        last_div = recent_divs.tail(1)
+                        div_date = last_div.index[0].strftime('%Y-%m-%d')
+                        div_val = last_div.values[0]
+                        if div_val > 0:
+                            dividend_info += f"<li><b>{clean_symbol}</b>: تازہ ترین اعلان کردہ ڈیویڈنڈ روپیہ {div_val:.2f} (تاریخ: {div_date})</li>"
+            except Exception as e:
+                print(f"Dividend error for {clean_symbol}: {e}")
 
             if not todays_data.empty:
                 current_price = todays_data['Close'].iloc[-1]
@@ -81,35 +92,34 @@ def generate_psx_report():
                 """
             else:
                 table_rows += f"""
-                <tr style="background-color: #fff3e0; text-align: center;">
+                <tr style="background-color: #fffde7; text-align: center;">
                     <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{clean_symbol}</td>
-                    <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #e65100; font-size: 13px;">فی الحال ڈیٹا دستیاب نہیں۔</td>
+                    <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">مارکیٹ میں اس شیئر کا لائیو ڈیٹا عارضی طور پر موصول نہیں ہوا۔</td>
                 </tr>
                 """
         except Exception as e:
             print(f"Error fetching {stock}: {e}")
             table_rows += f"""
             <tr style="background-color: #ffebee; text-align: center;">
-                <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{stock.replace('.KA', '')}</td>
-                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #c62828; font-size: 13px;">ڈیٹا حاصل کرنے میں عارضی مسئلہ۔</td>
+                <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{stock}</td>
+                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #c62828; font-size: 13px;">رابطے میں تکنیکی مسئلہ۔</td>
             </tr>
             """
 
     if not dividend_info:
-        dividend_info = "<li>موجودہ واچ لسٹ کے لیے قریبی ڈیویڈنڈ کا کوئی نیا باضابطہ اعلان تاحال موصول نہیں ہوا۔</li>"
+        dividend_info = "<li>موجودہ واچ لسٹ کے لیے حالیہ دنوں میں ڈیویڈنڈ کا کوئی نیا باضابطہ اعلان موجود نہیں۔</li>"
 
-    # مکمل ای میل کا بہتر اور موبائل فرینڈلی ڈیزائن
+    # ای میل کا مکمل ایچ ٹی ایم ایل ڈیزائن
     html_content = f"""
     <div dir="rtl" style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 10px; color: #333333;">
         <div style="max-width: 650px; margin: auto; background: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
             
-            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - لائیو رپورٹ</h2>
+            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - خودکار لائیو رپورٹ</h2>
             
-            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی تازہ ترین لائیو مارکیٹ اور ٹریڈنگ لیولز کی رپورٹ:</p>
+            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے تمام شیئرز کی تازہ ترین لائیو مارکیٹ، قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
             
             <h3 style="color: #37474f; font-size: 14px; margin-top: 15px;">📈 واچ لسٹ شیئرز اور تکنیکی سیٹ اپ</h3>
             
-            <!-- موبائل پر سکرول کرنے کے لیے بہترین فریم -->
             <div style="width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 5px;">
                 <table style="width: 100%; min-width: 500px; border-collapse: collapse; font-size: 12px;">
                     <thead>
@@ -129,7 +139,7 @@ def generate_psx_report():
             </div>
             
             <div style="background-color: #e8f4f8; border-right: 4px solid #0288d1; padding: 10px; margin-top: 15px; border-radius: 4px;">
-                <h4 style="margin: 0 0 6px 0; color: #01579b; font-size: 13px;">💰 کمپنियों کے ڈیویڈنڈز کی تازہ ترین صورتحال:</h4>
+                <h4 style="margin: 0 0 6px 0; color: #01579b; font-size: 13px;">💰 کمپنیوں کے تازہ ترین ڈیویڈنڈز کی صورتحال:</h4>
                 <ul style="margin: 0; padding-right: 15px; font-size: 12px; line-height: 1.5; color: #0d47a1;">
                     {dividend_info}
                 </ul>
@@ -151,7 +161,7 @@ def generate_psx_report():
     </div>
     """
     
-    send_email("📊 PSX درست اور مکمل ٹریڈنگ رپورٹ", html_content, to_email)
+    send_email("📊 PSX مکمل اور بہتر ٹریڈنگ رپورٹ", html_content, to_email)
 
 # 3. ای میل بھیجنے کا فنکشن
 def send_email(subject, html_body, to_email):
