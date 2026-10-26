@@ -4,7 +4,8 @@ import smtplib
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import requests
+import cloudscraper
+from bs4 import BeautifulSoup
 
 # 1. فائل سے ڈیٹا لوڈ کرنے کا فنکشن
 def load_data():
@@ -23,31 +24,44 @@ def load_data():
             json.dump(default_data, f, indent=4, ensure_ascii=False)
         return default_data
 
-# 2. پاکستان اسٹاک ایکسچینج کے مستند پبلک مارکیٹ ڈیٹا سے ریٹ نکالنے کا فنکشن
-def get_psx_market_data(symbol):
+# 2. کلاؤڈ اسکریپر کے ذریعے فائر وال اور بلاکنگ کو بائی پاس کر کے لائیو ڈیٹا نکالنے کا فنکشن
+def get_bypass_stock_data(symbol):
     clean_symbol = symbol.replace('.KA', '').strip().upper()
-    try:
-        # PSX کے لائیو مارکیٹ سمری کا پبلک اینڈ پوائنٹ
-        url = "https://dps.psx.com.pk/listings"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Referer": "https://dps.psx.com.pk/"
+    
+    # cloudscraper خودبخود کلاؤڈ فلائر اور بوٹ پروٹیکشن کو بائی پاس کر لیता ہے
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
         }
-        # متبادل کے طور پر دواس کی ہسٹری یا لائیو سمری API
-        api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
-        response = requests.get(api_url, headers=headers, timeout=10)
+    )
+    
+    try:
+        # پاکستان اسٹاک ایکسچینج کے پبلک ڈیٹا پیج یا MSN فنانس کا متبادل لنک
+        url = f"https://dps.psx.com.pk/company/{clean_symbol}"
+        response = scraper.get(url, timeout=12)
         
         if response.status_code == 200:
-            res_data = response.json()
-            if "data" in res_data and len(res_data["data"]) > 0:
-                latest = res_data["data"][-1]
-                current_price = float(latest[1])
-                open_price = float(res_data["data"][0][1]) if len(res_data["data"]) > 1 else current_price
-                percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
-                return current_price, open_price, percent_change
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # پی ایس ایکس کے پیج سے لائیو قیمت تلاش کرنا
+            price_div = soup.find('div', {'class': 'stats_val'}) or soup.find('span', {'id': 'ltp'})
+            
+            # اگر اس طرح نہ ملے تو ہم اس کے JSON API سے ڈیٹا نکالنے کی کوشش کرتے ہیں
+            api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
+            api_res = scraper.get(api_url, timeout=10)
+            
+            if api_res.status_code == 200:
+                api_data = api_res.json()
+                if "data" in api_data and len(api_data["data"]) > 0:
+                    latest = api_data["data"][-1]
+                    current_price = float(latest[1])
+                    open_price = float(api_data["data"][0][1]) if len(api_data["data"]) > 1 else current_price
+                    percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
+                    return current_price, open_price, percent_change
     except Exception as e:
-        print(f"PSX API Error for {clean_symbol}: {e}")
+        print(f"Bypass Error for {clean_symbol}: {e}")
         
     return None, None, None
 
@@ -65,9 +79,9 @@ def generate_psx_report():
     
     for stock in stocks:
         clean_symbol = stock.replace('.KA', '').strip().upper()
-        print(f"Fetching data for {clean_symbol}...")
+        print(f"Fetching live bypass data for {clean_symbol}...")
         
-        current_price, open_price, percent_change = get_psx_market_data(clean_symbol)
+        current_price, open_price, percent_change = get_bypass_stock_data(clean_symbol)
         
         if current_price is not None:
             total_gain_loss_pct += percent_change
@@ -104,7 +118,7 @@ def generate_psx_report():
             table_rows += f"""
             <tr style="background-color: #fffde7; text-align: center;">
                 <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{clean_symbol}</td>
-                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">مارکیٹ سرور سے لائیو ڈیٹا حاصل کرنے میں عارضی وقفہ۔</td>
+                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">سرور سے رابطہ ہو رہا ہے، عارضی وقفہ۔</td>
             </tr>
             """
 
@@ -117,9 +131,9 @@ def generate_psx_report():
     <div dir="rtl" style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 10px; color: #333333;">
         <div style="max-width: 650px; margin: auto; background: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
             
-            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - لائیو ڈائریکٹ رپورٹ</h2>
+            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - بائی پاس لائیو رپورٹ</h2>
             
-            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی براہِ راست PSX سرور سے حاصل کردہ تازہ ترین لائیو قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
+            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی فائر وال بائی پاس کر کے حاصل کردہ تازہ ترین لائیو ریٹس اور ٹریڈنگ لیولز کی رپورٹ:</p>
             
             <!-- پورٹ فولیو سمری -->
             <div style="background-color: #e0f2f1; border: 1px solid #b2dfdb; padding: 10px; border-radius: 6px; margin-bottom: 15px; text-align: center;">
@@ -157,8 +171,8 @@ def generate_psx_report():
             <div style="background-color: #fffde7; border-right: 4px solid #fbc02d; padding: 10px; margin-top: 10px; border-radius: 4px;">
                 <h4 style="margin: 0 0 6px 0; color: #f57f17; font-size: 13px;">📰 مارکیٹ کا اہم رجحان:</h4>
                 <ul style="margin: 0; padding-right: 15px; font-size: 12px; line-height: 1.5; color: #4e342e;">
-                    <li>براہِ راست آفیشل ڈیٹا سورس سے ریٹس بالکل درست اور حقیقی آئیں گے۔</li>
-                    <li>رسک زون والے شیئرز پر کڑی نظر رکھیں۔</li>
+                    <li>براؤزر سمیولیشن (Cloudscraper) کے ذریعے اب سرور کی رکاوٹیں ختم کر دی گئی ہیں۔</li>
+                    <li>مارکیٹ کے اتار چڑھاؤ پر گہری نظر رکھیں۔</li>
                 </ul>
             </div>
             
@@ -170,7 +184,7 @@ def generate_psx_report():
     </div>
     """
     
-    send_email("📊 PSX لائیو مارکیٹ رپورٹ", html_content, to_email)
+    send_email("📊 PSX بائی پاس لائیو مارکیٹ رپورٹ", html_content, to_email)
 
 # 4. ای میل بھیجنے کا فنکشن
 def send_email(subject, html_body, to_email):
