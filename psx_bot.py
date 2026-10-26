@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import requests
-from bs4 import BeautifulSoup
 
 # 1. فائل سے ڈیٹا لوڈ کرنے کا فنکشن
 def load_data():
@@ -24,37 +23,31 @@ def load_data():
             json.dump(default_data, f, indent=4, ensure_ascii=False)
         return default_data
 
-# 2. MSN Money اور متبادل ذرائع سے لائیو ڈیٹا حاصل کرنے کا اسمارٹ فنکشن
-def get_msn_stock_data(symbol):
+# 2. پاکستان اسٹاک ایکسچینج کے مستند پبلک مارکیٹ ڈیٹا سے ریٹ نکالنے کا فنکشن
+def get_psx_market_data(symbol):
     clean_symbol = symbol.replace('.KA', '').strip().upper()
-    
-    # MSN Money عام طور پر PSX کے لیے سمبل اور مارکیٹ کوڈ استعمال کرتا ہے
-    # ہم یہاں MSN کے پبلک پیج یا فنانس سرچ سے لائیو ریٹ اسکریپ کرنے کا طریقہ لگاتے ہیں
     try:
-        url = f"https://www.msn.com/en-us/money/stockdetails/fi-10.1.{clean_symbol}.PK"
+        # PSX کے لائیو مارکیٹ سمری کا پبلک اینڈ پوائنٹ
+        url = "https://dps.psx.com.pk/listings"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9"
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://dps.psx.com.pk/"
         }
-        response = requests.get(url, headers=headers, timeout=8)
+        # متبادل کے طور پر دواس کی ہسٹری یا لائیو سمری API
+        api_url = f"https://dps.psx.com.pk/timeseries/int/{clean_symbol}"
+        response = requests.get(api_url, headers=headers, timeout=10)
+        
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # MSN کے صفحے سے قیمت تلاش کرنے کے مختلف ممکنہ ٹیگز
-            price_tag = soup.find('div', {'class': 'livePrice'}) or soup.find('span', {'class': 'price'})
-            if price_tag:
-                current_price = float(price_tag.text.replace(',', '').strip())
-                
-                # فیصد تبدیلی تلاش کرنا
-                change_tag = soup.find('div', {'class': 'netChangePercent'}) or soup.find('span', {'class': 'percent'})
-                percent_change = 0.0
-                if change_tag:
-                    percent_change = float(change_tag.text.replace('%', '').replace('+', '').strip())
-                
-                open_price = current_price / (1 + (percent_change / 100)) if percent_change != 0 else current_price
+            res_data = response.json()
+            if "data" in res_data and len(res_data["data"]) > 0:
+                latest = res_data["data"][-1]
+                current_price = float(latest[1])
+                open_price = float(res_data["data"][0][1]) if len(res_data["data"]) > 1 else current_price
+                percent_change = ((current_price - open_price) / open_price) * 100 if open_price != 0 else 0
                 return current_price, open_price, percent_change
     except Exception as e:
-        print(f"MSN Fetch Error for {clean_symbol}: {e}")
+        print(f"PSX API Error for {clean_symbol}: {e}")
         
     return None, None, None
 
@@ -72,12 +65,11 @@ def generate_psx_report():
     
     for stock in stocks:
         clean_symbol = stock.replace('.KA', '').strip().upper()
-        print(f"Fetching MSN data for {clean_symbol}...")
+        print(f"Fetching data for {clean_symbol}...")
         
-        current_price, open_price, percent_change = get_msn_stock_data(clean_symbol)
+        current_price, open_price, percent_change = get_psx_market_data(clean_symbol)
         
         if current_price is not None:
-            price_change = current_price - open_price
             total_gain_loss_pct += percent_change
             valid_stocks_count += 1
             
@@ -112,7 +104,7 @@ def generate_psx_report():
             table_rows += f"""
             <tr style="background-color: #fffde7; text-align: center;">
                 <td style="padding: 10px 6px; border: 1px solid #ddd; font-weight: bold; font-size: 13px;">{clean_symbol}</td>
-                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">MSN فنانس سرور سے لائیو ڈیٹا حاصل کرنے میں عارضی وقفہ۔</td>
+                <td colspan="5" style="padding: 10px 6px; border: 1px solid #ddd; color: #f57f17; font-size: 13px;">مارکیٹ سرور سے لائیو ڈیٹا حاصل کرنے میں عارضی وقفہ۔</td>
             </tr>
             """
 
@@ -125,9 +117,9 @@ def generate_psx_report():
     <div dir="rtl" style="font-family: Arial, sans-serif; background-color: #f4f6f8; padding: 10px; color: #333333;">
         <div style="max-width: 650px; margin: auto; background: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
             
-            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - MSN فنانس لائیو رپورٹ</h2>
+            <h2 style="color: #004d40; text-align: center; border-bottom: 2px solid #004d40; padding-bottom: 8px; font-size: 16px;">📊 پاکستان اسٹاک ایکسچینج - لائیو ڈائریکٹ رپورٹ</h2>
             
-            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی MSN فنانس سے حاصل کردہ تازہ ترین لائیو قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
+            <p style="font-size: 13px; line-height: 1.6;">السلام علیکم! یہ رہی آپ کی واچ لسٹ کے شیئرز کی براہِ راست PSX سرور سے حاصل کردہ تازہ ترین لائیو قیمتوں اور ٹریڈنگ لیولز کی رپورٹ:</p>
             
             <!-- پورٹ فولیو سمری -->
             <div style="background-color: #e0f2f1; border: 1px solid #b2dfdb; padding: 10px; border-radius: 6px; margin-bottom: 15px; text-align: center;">
@@ -165,7 +157,7 @@ def generate_psx_report():
             <div style="background-color: #fffde7; border-right: 4px solid #fbc02d; padding: 10px; margin-top: 10px; border-radius: 4px;">
                 <h4 style="margin: 0 0 6px 0; color: #f57f17; font-size: 13px;">📰 مارکیٹ کا اہم رجحان:</h4>
                 <ul style="margin: 0; padding-right: 15px; font-size: 12px; line-height: 1.5; color: #4e342e;">
-                    <li>MSN فنانس سورس کے استعمال سے اب ریٹس میں غیر ضروری فرق ختم ہو جائے گا۔</li>
+                    <li>براہِ راست آفیشل ڈیٹا سورس سے ریٹس بالکل درست اور حقیقی آئیں گے۔</li>
                     <li>رسک زون والے شیئرز پر کڑی نظر رکھیں۔</li>
                 </ul>
             </div>
@@ -178,7 +170,7 @@ def generate_psx_report():
     </div>
     """
     
-    send_email("📊 PSX MSN فنانس لائیو رپورٹ", html_content, to_email)
+    send_email("📊 PSX لائیو مارکیٹ رپورٹ", html_content, to_email)
 
 # 4. ای میل بھیجنے کا فنکشن
 def send_email(subject, html_body, to_email):
